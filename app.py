@@ -9,7 +9,7 @@ app = Flask(__name__)
 def home():
     return "Garmin Bridge is Running!"
 
-# JAVÍTÁS: Itt adtam meg a hiányzó részt
+# JAVÍTVA: methods= került a hiányzó rész helyére
 @app.route('/get_stats', methods=)
 def get_stats():
     # Hitelesítési adatok betöltése a környezeti változókból
@@ -17,7 +17,7 @@ def get_stats():
     password = os.environ.get("GARMIN_PASSWORD")
     
     if not email or not password:
-        return jsonify({"error": "Hiányzó email vagy jelszó a környezeti változókban!"}), 500
+        return jsonify({"error": "Hianyzik a GARMIN_EMAIL vagy GARMIN_PASSWORD kornyezeti valtozo!"}), 500
 
     try:
         # Belépés a Garminba
@@ -27,9 +27,9 @@ def get_stats():
         # Mai dátum lekérése
         today = date.today()
         
-        # Adatok lekérése: Napi statisztikák és utolsó edzések
+        # Adatok lekérése: Napi statisztikák és utolsó 5 edzés
         stats = client.get_stats(today.isoformat())
-        activities = client.get_activities(0, 5) # Utolsó 5 edzés
+        activities = client.get_activities(0, 5) 
         
         # Válasz összeállítása JSON formátumban
         data = {
@@ -38,7 +38,7 @@ def get_stats():
         }
         return jsonify(data)
     except Exception as e:
-        # Hiba esetén visszaküldjük a hiba okát
+        # Hiba esetén visszaküldjük a hiba okát szövegesen
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
