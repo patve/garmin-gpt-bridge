@@ -6,6 +6,8 @@ import logging
 import shutil
 import time
 
+from pathlib import Path
+
 # Configure logging (don't log sensitive data)
 logging.basicConfig(level=logging.INFO)
 logging.getLogger('garminconnect').setLevel(logging.WARNING)
@@ -15,31 +17,45 @@ app = Flask(__name__)
 _client = None
 _client_login_ts = 0
 def get_client():
-    """Logs in once per process; reuses the session in-memory."""
-    global _client, _client_login_ts
+    """Reuse logged-in client for a short time to avoid repeated MFA per request burst."""
+    global _client, _client_login_ts, _pending_mfa
 
     email = os.getenv("GARMIN_EMAIL")
     password = os.getenv("GARMIN_PASSWORD")
-    tokenstore = os.getenv("GARMINTOKENS", "/tmp/.garminconnect")
-
     if not email or not password:
         raise ValueError("GARMIN_EMAIL and GARMIN_PASSWORD must be set")
 
-    # Reuse client for e.g. 30 minutes to avoid repeated MFA on multiple endpoints
+    tokenstore = os.getenv("GARMINTOKENS", "/tmp/.garminconnect")
+    tokenstore_path = Path(tokenstore).expanduser()
+    tokenstore_path.mkdir(parents=True, exist_ok=True)
+
+    # 30 perces in-memory reuse (egy Render instance-en belül)
     if _client and (time.time() - _client_login_ts) < 30 * 60:
         return _client
 
-    # Avoid partial/old tokens causing OAuth refresh errors (free Render has ephemeral FS anyway)
+    # 1) próbáljuk tokenekből
     try:
-        shutil.rmtree(tokenstore, ignore_errors=True)
+        garmin = Garmin()
+        garmin.login(str(tokenstore_path))  # <-- tokenstore itt van, nem __init__-ben
+        _client = garmin
+        _client_login_ts = time.time()
+        return _client
     except Exception:
         pass
 
-    client = Garmin(email, password, tokenstore=tokenstore)  # supported by python-garminconnect example :contentReference[oaicite:3]{index=3}
-    client.login()  # MFA email happens here when needed
-    _client = client
+    # 2) ha nincs token / érvénytelen: login + MFA kezeléssel
+    garmin = Garmin(email=email, password=password, is_cn=False, return_on_mfa=True)
+    result1, result2 = garmin.login()
+
+    if result1 == "needs_mfa":
+        _pending_mfa = result2
+        # ezt a hibát az endpointokban JSON-ná alakítjuk
+        raise RuntimeError("MFA_REQUIRED")
+
+    # ha nem kell MFA: mentsük a tokeneket és kész
+    garmin.garth.dump(str(tokenstore_path))
+    _client = garmin
     _client_login_ts = time.time()
-    print("✅ Garmin client authenticated successfully")
     return _client
 def require_auth(f):
     """Decorator to check API key"""
@@ -77,6 +93,40 @@ def home():
             "/api/training_readiness?date=2025-12-30"
         ]
     })
+
+@app.route("/api/mfa", methods=["POST"])
+@require_auth
+def submit_mfa():
+    global _client, _client_login_ts, _pending_mfa
+
+    tokenstore = os.getenv("GARMINTOKENS", "/tmp/.garminconnect")
+    tokenstore_path = Path(tokenstore).expanduser()
+    tokenstore_path.mkdir(parents=True, exist_ok=True)
+
+    data = request.get_json(silent=True) or {}
+    mfa_code = data.get("code")
+
+    if not _pending_mfa:
+        return jsonify({"error": "No pending MFA challenge"}), 400
+    if not mfa_code:
+        return jsonify({"error": "Missing MFA code"}), 400
+
+    email = os.getenv("GARMIN_EMAIL")
+    password = os.getenv("GARMIN_PASSWORD")
+
+    garmin = Garmin(email=email, password=password, is_cn=False, return_on_mfa=True)
+    # Újra elindítjuk a flow-t, majd folytatjuk a korábban kapott result2-vel
+    # (a library mintája szerint resume_login(result2, mfa_code))
+    try:
+        garmin.resume_login(_pending_mfa, mfa_code)
+        garmin.garth.dump(str(tokenstore_path))
+        _pending_mfa = None
+
+        _client = garmin
+        _client_login_ts = time.time()
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        return jsonify({"error": f"MFA failed: {e}"}), 400
 
 @app.route('/health')
 def health():
