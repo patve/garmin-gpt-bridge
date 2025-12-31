@@ -3,6 +3,8 @@ from garminconnect import Garmin
 import os
 from functools import lru_cache
 import logging
+import shutil
+import time
 
 # Configure logging (don't log sensitive data)
 logging.basicConfig(level=logging.INFO)
@@ -11,6 +13,8 @@ logging.getLogger('garminconnect').setLevel(logging.WARNING)
 app = Flask(__name__)
 
 @lru_cache(maxsize=1)
+_client = None
+_client_login_ts = 0
 def get_client():
     """Logs in once per process; reuses the session in-memory."""
     global _client, _client_login_ts
