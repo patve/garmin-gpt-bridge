@@ -12,18 +12,32 @@ app = Flask(__name__)
 
 @lru_cache(maxsize=1)
 def get_client():
-    """Cached client - logs in once, reuses session"""
-    email = os.getenv('GARMIN_EMAIL')
-    password = os.getenv('GARMIN_PASSWORD')
-    
+    """Logs in once per process; reuses the session in-memory."""
+    global _client, _client_login_ts
+
+    email = os.getenv("GARMIN_EMAIL")
+    password = os.getenv("GARMIN_PASSWORD")
+    tokenstore = os.getenv("GARMINTOKENS", "/tmp/.garminconnect")
+
     if not email or not password:
         raise ValueError("GARMIN_EMAIL and GARMIN_PASSWORD must be set")
-    
-    client = Garmin(email, password)
-    client.login()
-    print("✅ Garmin client authenticated successfully")
-    return client
 
+    # Reuse client for e.g. 30 minutes to avoid repeated MFA on multiple endpoints
+    if _client and (time.time() - _client_login_ts) < 30 * 60:
+        return _client
+
+    # Avoid partial/old tokens causing OAuth refresh errors (free Render has ephemeral FS anyway)
+    try:
+        shutil.rmtree(tokenstore, ignore_errors=True)
+    except Exception:
+        pass
+
+    client = Garmin(email, password, tokenstore=tokenstore)  # supported by python-garminconnect example :contentReference[oaicite:3]{index=3}
+    client.login()  # MFA email happens here when needed
+    _client = client
+    _client_login_ts = time.time()
+    print("✅ Garmin client authenticated successfully")
+    return _client
 def require_auth(f):
     """Decorator to check API key"""
     def decorated(*args, **kwargs):
