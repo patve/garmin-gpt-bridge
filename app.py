@@ -12,7 +12,6 @@ logging.getLogger('garminconnect').setLevel(logging.WARNING)
 
 app = Flask(__name__)
 
-@lru_cache(maxsize=1)
 _client = None
 _client_login_ts = 0
 def get_client():
